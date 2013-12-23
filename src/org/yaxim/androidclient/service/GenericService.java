@@ -67,8 +67,7 @@ public abstract class GenericService extends Service {
 	public void onCreate() {
 		Log.i(TAG, "called onCreate()");
 		super.onCreate();
-		mConfig = new YaximConfiguration(PreferenceManager
-				.getDefaultSharedPreferences(this));
+		mConfig = org.yaxim.androidclient.YaximApplication.getConfig(this);
 		mVibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
 		mWakeLock = ((PowerManager)getSystemService(Context.POWER_SERVICE))
 				.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, APP_NAME);
@@ -93,16 +92,33 @@ public abstract class GenericService extends Service {
 	}
 
 	protected void notifyClient(String fromJid, String fromUserName, String message,
-			boolean showNotification) {
+			boolean showNotification, boolean silent_notification) {
 		if (!showNotification) {
 			// only play sound and return
-			RingtoneManager.getRingtone(getApplicationContext(), mConfig.notifySound).play();
+			try {
+				if (!silent_notification)
+					RingtoneManager.getRingtone(getApplicationContext(), mConfig.notifySound).play();
+			} catch (NullPointerException e) {
+				// ignore NPE when ringtone was not found
+			}
 			return;
 		}
 		mWakeLock.acquire();
+
+		// Override silence when notification is created initially
+		// if there is no open notification for that JID, and we get a "silent"
+		// one (i.e. caused by an incoming carbon message), we still ring/vibrate,
+		// but only once. As long as the user ignores the notifications, no more
+		// sounds are made. When the user opens the chat window, the counter is
+		// reset and a new sound can be made.
+		if (silent_notification && !notificationCount.containsKey(fromJid)) {
+			silent_notification = false;		
+		}
+
 		setNotification(fromJid, fromUserName, message);
 		setLEDNotification();
-		mNotification.sound = mConfig.notifySound;
+		if (!silent_notification)
+			mNotification.sound = mConfig.notifySound;
 		
 		int notifyId = 0;
 		if (notificationId.containsKey(fromJid)) {
@@ -115,13 +131,13 @@ public abstract class GenericService extends Service {
 
 		// If vibration is set to "system default", add the vibration flag to the 
 		// notification and let the system decide.
-		if("SYSTEM".equals(mConfig.vibraNotify)) {
+		if(!silent_notification && "SYSTEM".equals(mConfig.vibraNotify)) {
 			mNotification.defaults |= Notification.DEFAULT_VIBRATE;
 		}
 		mNotificationMGR.notify(notifyId, mNotification);
 		
 		// If vibration is forced, vibrate now.
-		if("ALWAYS".equals(mConfig.vibraNotify)) {
+		if(!silent_notification && "ALWAYS".equals(mConfig.vibraNotify)) {
 			mVibrator.vibrate(400);
 		}
 		mWakeLock.release();
